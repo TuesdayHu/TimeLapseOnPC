@@ -6,31 +6,38 @@ import time
 import os
 import cv2
 from photo_capture import capture_timelapse, get_supported_resolutions
+from photo2video import create_timelapse  # 新增导入
 
 class TimelapseApp:
     def __init__(self, root):
-        """
-        初始化GUI界面，布局输入框、分辨率选择、按钮和状态显示。
-        参数：
-            root: Tk主窗口对象
-        """
         self.root = root
         self.root.title("延时摄影控制台")
-        self.root.geometry("700x250")
+        self.root.geometry("700x320")
         self.root.resizable(False, False)
-        
+
+        # 创建Notebook
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill='both', expand=True)
+
+        # --- 第一个tab：定时拍照 ---
+        self.tab_capture = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_capture, text="定时拍照")
+        self.init_capture_tab(self.tab_capture)
+
+        # --- 第二个tab：照片转视频 ---
+        self.tab_video = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_video, text="照片转视频")
+        self.init_video_tab(self.tab_video)
+
+    def init_capture_tab(self, parent):
         # 默认保存路径
-        self.save_dir = os.path.join(os.getcwd(), "PhotoCaptured")
+        self.save_dir = os.path.join(os.getcwd(), "PhotoOutput")
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
-
-        # 输入校验：只允许正浮点数
         vcmd = (self.root.register(self.validate_positive_float), '%P')
-        
         # 输入区
-        input_frame = ttk.Frame(root)
+        input_frame = ttk.Frame(parent)
         input_frame.pack(pady=(20, 0), padx=10, fill='x')
-
         self.label_interval = ttk.Label(input_frame, text="拍摄间隔时间：")
         self.label_interval.pack(side='left')
         self.entry_interval = ttk.Entry(input_frame, width=8, validate='key', validatecommand=vcmd)
@@ -40,7 +47,6 @@ class TimelapseApp:
         self.combo_interval_unit['values'] = ['分钟', '秒']
         self.combo_interval_unit.set('秒')
         self.combo_interval_unit.pack(side='left', padx=(5, 20))
-
         self.label_duration = ttk.Label(input_frame, text="拍摄时长：")
         self.label_duration.pack(side='left')
         self.entry_duration = ttk.Entry(input_frame, width=8, validate='key', validatecommand=vcmd)
@@ -50,16 +56,12 @@ class TimelapseApp:
         self.combo_duration_unit['values'] = ['分钟', '小时']
         self.combo_duration_unit.set('小时')
         self.combo_duration_unit.pack(side='left', padx=(0, 5))
-
-        # 添加时间戳选择框
         self.add_timestamp_var = tk.IntVar(value=1)
         self.check_add_timestamp = ttk.Checkbutton(input_frame, text="添加时间戳", variable=self.add_timestamp_var)
         self.check_add_timestamp.pack(side='left', padx=(10, 0))
-
         # 分辨率和保存路径区
-        action_frame = ttk.Frame(root)
+        action_frame = ttk.Frame(parent)
         action_frame.pack(pady=(10, 0), padx=10, fill='x')
-
         self.label_res = ttk.Label(action_frame, text="分辨率选择：")
         self.label_res.pack(side='left')
         self.combo_res = ttk.Combobox(action_frame, state='readonly', width=12)
@@ -67,7 +69,6 @@ class TimelapseApp:
         self.combo_res['values'] = ["摄像头分辨率检测中..."]
         self.combo_res.set("摄像头分辨率检测中...")
         self.combo_res.config(state='disabled')
-
         self.label_save = ttk.Label(action_frame, text="照片保存路径：")
         self.label_save.pack(side='left')
         self.entry_save_path = ttk.Entry(action_frame, width=40, state='readonly')
@@ -78,41 +79,72 @@ class TimelapseApp:
         self.entry_save_path.config(state='readonly')
         self.btn_choose_path = ttk.Button(action_frame, text="选择", command=self.choose_save_path)
         self.btn_choose_path.pack(side='left', padx=(5, 0))
-
         # 开始拍摄按钮单独一行
-        btn_frame = ttk.Frame(root)
+        btn_frame = ttk.Frame(parent)
         btn_frame.pack(pady=(8, 0), padx=10, fill='x')
         self.start_button = ttk.Button(btn_frame, text="开始拍摄", command=self.start_capture)
         self.start_button.pack(fill='x', expand=True)
-
-        # 状态显示区（扁+滚动条）
-        status_frame = ttk.Frame(root)
+        # 状态显示区
+        status_frame = ttk.Frame(parent)
         status_frame.pack(fill='both', padx=10, pady=(10, 0), expand=True)
         self.status_text = tk.Text(status_frame, height=3, state='disabled', wrap='none')
         self.status_text.pack(side='left', fill='both', expand=True)
         self.scrollbar = ttk.Scrollbar(status_frame, orient='vertical', command=self.status_text.yview)
         self.scrollbar.pack(side='right', fill='y')
         self.status_text['yscrollcommand'] = self.scrollbar.set
-
         # 进度条区
-        progress_frame = ttk.Frame(root)
+        progress_frame = ttk.Frame(parent)
         progress_frame.pack(fill='x', padx=10, pady=(5, 10))
         self.progress = ttk.Progressbar(progress_frame, orient='horizontal', length=400, mode='determinate')
         self.progress.pack(fill='x', expand=True)
-
         # 标记是否已检测分辨率
         self.resolutions = []
         self.res_checked = False
         self.stop_flag = threading.Event()
         self.current_total = 0
-
-        # 窗体一打开就检测分辨率
         threading.Thread(target=self.detect_resolutions, daemon=True).start()
 
+    def init_video_tab(self, parent):
+        # 照片转视频tab内容
+        frame = ttk.Frame(parent)
+        frame.pack(pady=20, padx=10, fill='x')
+        # 输入目录（改为读取路径，默认与照片保存路径同步）
+        ttk.Label(frame, text="照片读取路径：").pack(side='left')
+        self.video_input_dir = tk.StringVar(value=getattr(self, 'save_dir', os.path.join(os.getcwd(), "PhotoOutput")))
+        self.entry_video_input = ttk.Entry(frame, textvariable=self.video_input_dir, width=40)
+        self.entry_video_input.pack(side='left', padx=(5, 0))
+        ttk.Button(frame, text="选择", command=self.choose_video_input_dir).pack(side='left', padx=(5, 20))
+        # 输出文件名
+        ttk.Label(frame, text="输出视频名：").pack(side='left')
+        self.video_output_name = tk.StringVar(value="timelapse_output")
+        self.entry_video_output = ttk.Entry(frame, textvariable=self.video_output_name, width=18)
+        self.entry_video_output.pack(side='left', padx=(5, 0))
+        # 新增：视频保存路径
+        video_output_path_frame = ttk.Frame(parent)
+        video_output_path_frame.pack(pady=(5, 0), padx=10, fill='x')
+        ttk.Label(video_output_path_frame, text="视频保存路径：").pack(side='left')
+        self.video_output_dir = tk.StringVar(value=os.path.join(os.getcwd(), "VideoOutput"))
+        self.entry_video_output_dir = ttk.Entry(video_output_path_frame, textvariable=self.video_output_dir, width=40, state='readonly')
+        self.entry_video_output_dir.pack(side='left', padx=(5, 0))
+        self.btn_choose_video_output_dir = ttk.Button(video_output_path_frame, text="选择", command=self.choose_video_output_dir)
+        self.btn_choose_video_output_dir.pack(side='left', padx=(5, 0))
+        # 帧率
+        frame2 = ttk.Frame(parent)
+        frame2.pack(pady=(0, 0), padx=10, fill='x')
+        ttk.Label(frame2, text="帧率：").pack(side='left')
+        self.video_fps = tk.StringVar(value="24")
+        self.entry_video_fps = ttk.Entry(frame2, textvariable=self.video_fps, width=5)
+        self.entry_video_fps.pack(side='left', padx=(5, 0))
+        # 开始按钮
+        btn_video_frame = ttk.Frame(parent)
+        btn_video_frame.pack(pady=(8, 0), padx=10, fill='x')
+        self.btn_video_start = ttk.Button(btn_video_frame, text="开始生成视频", command=self.start_video_generate)
+        self.btn_video_start.pack(fill='x', expand=True)
+        # 日志区
+        self.video_status_text = tk.Text(parent, height=5, state='disabled', wrap='none')
+        self.video_status_text.pack(fill='both', padx=10, pady=(10, 0), expand=True)
+
     def choose_save_path(self):
-        """
-        选择照片保存路径。
-        """
         path = filedialog.askdirectory(initialdir=self.save_dir, title="选择照片保存文件夹")
         if path:
             self.save_dir = path
@@ -120,22 +152,77 @@ class TimelapseApp:
             self.entry_save_path.delete(0, tk.END)
             self.entry_save_path.insert(0, self.save_dir)
             self.entry_save_path.config(state='readonly')
+            # 同步更新视频读取路径
+            self.video_input_dir.set(self.save_dir)
+
+    def choose_video_input_dir(self):
+        path = filedialog.askdirectory(title="选择照片读取路径")
+        if path:
+            self.video_input_dir.set(path)
+    def choose_video_output_dir(self):
+        path = filedialog.askdirectory(title="选择视频保存路径")
+        if path:
+            self.video_output_dir.set(path)
 
     def validate_positive_float(self, value):
-        """
-        只允许正浮点数或空字符串，允许输入小数点但禁止非法内容。
-        """
         if value == '':
             return True
-        # 允许以小数点结尾或只输入小数点
         if value == '.' or value == '0.':
             return True
         try:
-            # 允许以小数点结尾（如'1.'），此时float(value)也能通过
             v = float(value)
             return v > 0
         except ValueError:
             return False
+
+    def start_video_generate(self):
+        input_dir = self.video_input_dir.get().strip()
+        output_name = self.video_output_name.get().strip()
+        fps_str = self.video_fps.get().strip()
+        output_dir = self.video_output_dir.get().strip()
+        if not input_dir or not os.path.exists(input_dir):
+            self.append_video_status("请选择有效的照片读取路径！\n")
+            return
+        if not output_name:
+            output_name = "timelapse_output"
+        try:
+            fps = int(fps_str)
+            if fps <= 0:
+                raise ValueError
+        except ValueError:
+            self.append_video_status("帧率必须为正整数！\n")
+            return
+        if not output_dir:
+            output_dir = os.path.join(os.getcwd(), "VideoOutput")
+        output_file = os.path.join(output_dir, f"{output_name}.mp4")
+        self.btn_video_start.config(state='disabled')
+        self.append_video_status(f"开始生成视频: {output_file}\n")
+        threading.Thread(target=self.run_create_timelapse, args=(input_dir, output_file, fps, output_dir), daemon=True).start()
+
+    def run_create_timelapse(self, input_dir, output_file, fps, output_dir=None):
+        try:
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            def log(msg):
+                self.append_video_status(msg + '\n')
+            # 用重定向print的方式捕获photo2video.py的输出
+            import sys
+            from io import StringIO
+            old_stdout = sys.stdout
+            sys.stdout = mystdout = StringIO()
+            create_timelapse(input_dir, output_file, fps)
+            sys.stdout = old_stdout
+            log(mystdout.getvalue())
+        except Exception as e:
+            self.append_video_status(f"发生错误: {e}\n")
+        finally:
+            self.btn_video_start.config(state='normal')
+
+    def append_video_status(self, msg):
+        self.video_status_text.config(state='normal')
+        self.video_status_text.insert('end', msg)
+        self.video_status_text.see('end')
+        self.video_status_text.config(state='disabled')
 
     def start_capture(self):
         """
