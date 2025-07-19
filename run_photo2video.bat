@@ -1,1 +1,0 @@
-python photo2video.py
