@@ -50,7 +50,7 @@ def create_timelapse(input_dir, output_file, fps=24):
         
         height, width, _ = first_image.shape
         
-        # Create video writer with H.264 codec for MP4
+        # Create video writer with mp4v codec for MP4
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Using mp4v codec for MP4 format
         out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
         
@@ -70,6 +70,27 @@ def create_timelapse(input_dir, output_file, fps=24):
         
         out.release()
         print(f"Video saved as: {output_file}")
+        # 新增：用 ffmpeg 转码为 H.264 编码的 mp4
+        try:
+            import subprocess, sys
+            # 优先使用项目根目录下的 ffmpeg.exe
+            local_ffmpeg = os.path.join(os.path.dirname(sys.argv[0]), 'ffmpeg.exe')
+            ffmpeg_path = local_ffmpeg if os.path.exists(local_ffmpeg) else 'ffmpeg'
+            h264_output = output_file[:-4] + '_h264.mp4' if output_file.lower().endswith('.mp4') else output_file + '_h264.mp4'
+            cmd = [
+                ffmpeg_path,
+                '-y',
+                '-i', output_file,
+                '-vcodec', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-acodec', 'aac',
+                h264_output
+            ]
+            print(f"\n正在用 ffmpeg 转码为 H.264 mp4: {h264_output}")
+            subprocess.run(cmd, check=True)
+            print(f"H.264 视频已保存为: {h264_output}")
+        except Exception as e:
+            print(f"ffmpeg 转码失败: {e}")
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")

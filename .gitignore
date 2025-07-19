@@ -207,3 +207,6 @@ marimo/_lsp/
 __marimo__/
 *.mp4
 PhotoOutput/
+ffmpeg.exe
+ffplay.exe
+ffprobe.exe
