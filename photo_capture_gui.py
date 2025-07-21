@@ -197,32 +197,44 @@ class TimelapseApp:
         output_file = os.path.join(output_dir, f"{output_name}.mp4")
         self.btn_video_start.config(state='disabled')
         self.append_video_status(f"开始生成视频: {output_file}\n")
-        threading.Thread(target=self.run_create_timelapse, args=(input_dir, output_file, fps, output_dir), daemon=True).start()
+        threading.Thread(target=self.run_create_timelapse, args=(input_dir, output_file, fps), daemon=True).start()
 
-    def run_create_timelapse(self, input_dir, output_file, fps, output_dir=None):
+    def run_create_timelapse(self, input_dir, output_file, fps):
+        # 确保输出目录存在
+        output_dir = os.path.dirname(output_file)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        # 重定向print输出到GUI
+        class TextRedirector:
+            def __init__(self, widget):
+                self.widget = widget
+            def write(self, str_):
+                self.widget.root.after(0, self.widget.append_video_status, str_)
+            def flush(self):
+                pass
+        
+        import sys
+        original_stdout = sys.stdout
+        sys.stdout = TextRedirector(self)
+
         try:
-            if output_dir and not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            def log(msg):
-                self.append_video_status(msg + '\n')
-            # 用重定向print的方式捕获photo2video.py的输出
-            import sys
-            from io import StringIO
-            old_stdout = sys.stdout
-            sys.stdout = mystdout = StringIO()
             create_timelapse(input_dir, output_file, fps)
-            sys.stdout = old_stdout
-            log(mystdout.getvalue())
         except Exception as e:
-            self.append_video_status(f"发生错误: {e}\n")
+            self.append_video_status(f"视频生成失败: {e}\n")
         finally:
-            self.btn_video_start.config(state='normal')
+            sys.stdout = original_stdout
+            self.root.after(0, self.on_video_generate_complete)
 
     def append_video_status(self, msg):
         self.video_status_text.config(state='normal')
         self.video_status_text.insert('end', msg)
         self.video_status_text.see('end')
         self.video_status_text.config(state='disabled')
+
+    def on_video_generate_complete(self):
+        self.btn_video_start.config(state='normal')
+        self.append_video_status("视频生成完成!\n")
 
     def start_capture(self):
         """
@@ -322,70 +334,28 @@ class TimelapseApp:
         """
         def gui_log(msg):
             self.append_status(msg + '\n')
-        # 包装capture_timelapse，支持分辨率参数和进度条
+
         def update_progress(i):
             self.progress['value'] = i
             self.root.update_idletasks()
-        stopped = False
-        def patched_capture_timelapse(a, b, log_func=print):
-            output_dir = self.save_dir
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            max_retries = 3
-            retry_delay = 2
-            cap = None
-            for retry in range(max_retries):
-                if self.stop_flag.is_set():
-                    log_func("已停止拍摄")
-                    return
-                log_func(f"尝试初始化摄像头 (尝试 {retry + 1}/{max_retries})...")
-                cap = cv2.VideoCapture(0)
-                if not cap.isOpened():
-                    log_func("无法打开摄像头")
-                    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-                    if retry < max_retries - 1:
-                        log_func(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
-                        continue
-                    else:
-                        log_func("达到最大重试次数，程序退出")
-                        return
-                if res is not None:
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
-                width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-                height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-                log_func(f"当前摄像头分辨率: {width}x{height}")
-                ret, frame = cap.read()
-                if not ret:
-                    log_func("摄像头初始化成功，但无法读取画面")
-                    cap.release()
-                    if retry < max_retries - 1:
-                        log_func(f"等待 {retry_delay} 秒后重试...")
-                        time.sleep(retry_delay)
-                        continue
-                    else:
-                        log_func("达到最大重试次数，程序退出")
-                        return
-                log_func("摄像头初始化成功！")
-                break
-            else:
-                log_func("摄像头初始化失败，程序退出")
-                return
-            from photo_capture import calc_timestamp_params, add_timestamp_to_image
-            sample_timestamp = time.strftime("%Y-%m-%d_%H:%M:%S")
-            params = calc_timestamp_params(frame.shape, sample_timestamp)
-            try:
-                for i in range(b):
-                    if self.stop_flag.is_set():
-                        log_func("已停止拍摄")
-                        break
-                    ret, frame = cap.read()
-                    if not ret:
-                        log_func(f"Error: Could not capture frame {i+1}")
-                        continue
-                    timestamp = time.strftime("%Y-%m-%d_%H:%M:%S")
-                    if add_timestamp:
+
+        try:
+            # 直接调用重构后的 capture_timelapse
+            capture_timelapse(
+                interval,
+                count,
+                self.save_dir,
+                log_func=gui_log,
+                stop_event=self.stop_flag,
+                progress_callback=update_progress,
+                resolution=res,
+                add_timestamp=add_timestamp
+            )
+        except Exception as e:
+            self.append_status(f"拍摄出错: {e}")
+        finally:
+            # 不论成功失败，都恢复按钮状态
+            self.root.after(0, self.on_capture_complete)
                         frame_to_save = add_timestamp_to_image(frame, timestamp, params)
                     else:
                         frame_to_save = frame
@@ -501,4 +471,4 @@ class TimelapseApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = TimelapseApp(root)
-    root.mainloop() 
+    root.mainloop()

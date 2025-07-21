@@ -89,7 +89,7 @@ def add_timestamp_to_image(image, timestamp, params):
     cv2.putText(image, timestamp, (x, y), font, font_scale, (255,255,255), thickness, cv2.LINE_AA)
     return image
 
-def capture_timelapse(a, b, log_func=print):
+def capture_timelapse(a, b, output_dir, log_func=print, stop_event=None, progress_callback=None, resolution=None, add_timestamp=True):
     """
     执行延时拍摄，保存带时间戳的图片。
     参数：
@@ -97,7 +97,6 @@ def capture_timelapse(a, b, log_func=print):
         b: 拍摄次数
         log_func: 日志输出函数，默认为print
     """
-    output_dir = r"D:\timerPhotosOutpuut"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     max_retries = 3
@@ -117,6 +116,11 @@ def capture_timelapse(a, b, log_func=print):
                 log_func("达到最大重试次数，程序退出")
                 return
         supported_resolutions = get_supported_resolutions(cap, log_func=log_func)
+        if resolution:
+        log_func(f"\n尝试设置分辨率: {resolution[0]}x{resolution[1]}")
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+    else:
         if not supported_resolutions:
             log_func("未检测到可用分辨率，程序退出")
             cap.release()
@@ -151,17 +155,37 @@ def capture_timelapse(a, b, log_func=print):
     params = calc_timestamp_params(frame.shape, sample_timestamp)
     try:
         for i in range(b):
+            if stop_event and stop_event.is_set():
+                log_func("拍摄已停止")
+                break
+
             ret, frame = cap.read()
             if not ret:
                 log_func(f"Error: Could not capture frame {i+1}")
                 continue
-            timestamp = time.strftime("%Y-%m-%d_%H:%M:%S")
-            frame = add_timestamp_to_image(frame, timestamp, params)
-            filename = os.path.join(output_dir, f"photo_{timestamp.replace(':','-')}_{i+1}.jpg")
+
+            if add_timestamp:
+                timestamp = time.strftime("%Y-%m-%d_%H:%M:%S")
+                frame = add_timestamp_to_image(frame, timestamp, params)
+                filename = os.path.join(output_dir, f"photo_{timestamp.replace(':','-')}_{i+1}.jpg")
+            else:
+                timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+                filename = os.path.join(output_dir, f"photo_{timestamp}_{i+1}.jpg")
+
             cv2.imwrite(filename, frame)
             log_func(f"Saved photo {i+1}/{b} to {filename}")
+
+            if progress_callback:
+                progress_callback(i + 1)
+
             if i < b - 1:
-                time.sleep(a)
+                if stop_event:
+                    # 使用事件的wait方法替代sleep，以便能被立即中断
+                    if stop_event.wait(a):
+                        log_func("拍摄已停止")
+                        break # 如果事件被设置，则退出循环
+                else:
+                    time.sleep(a)
     finally:
         cap.release()
         log_func("Timelapse capture completed!")

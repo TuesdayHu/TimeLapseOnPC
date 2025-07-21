@@ -2,6 +2,8 @@ import os
 import cv2
 import re
 from datetime import datetime
+import subprocess
+import sys
 
 def get_timestamp_from_filename(filename):
     # Extract timestamp and index from filename
@@ -49,53 +51,42 @@ def create_timelapse(input_dir, output_file, fps=24):
             return
         
         height, width, _ = first_image.shape
-        
-        # Create video writer with mp4v codec for MP4
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Using mp4v codec for MP4 format
-        out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
-        
-        if not out.isOpened():
-            print(f"Failed to create video writer for {output_file}")
-            return
-        
-        # Write frames to video
-        for _, _, filename in sorted_files:
-            img_path = os.path.join(input_dir, filename)
-            frame = cv2.imread(img_path)
-            if frame is None:
-                print(f"Failed to read image: {img_path}")
-                continue
-            out.write(frame)
-            print(f"Processed: {filename}")
-        
-        out.release()
-        print(f"Video saved as: {output_file}")
-        # 新增：用 ffmpeg 转码为 H.264 编码的 mp4
-        try:
-            import subprocess, sys
-            # 优先使用项目根目录下的 ffmpeg.exe
-            local_ffmpeg = os.path.join(os.path.dirname(sys.argv[0]), 'ffmpeg.exe')
-            ffmpeg_path = local_ffmpeg if os.path.exists(local_ffmpeg) else 'ffmpeg'
-            h264_output = output_file[:-4] + '_h264.mp4' if output_file.lower().endswith('.mp4') else output_file + '_h264.mp4'
-            cmd = [
-                ffmpeg_path,
-                '-y',
-                '-i', output_file,
-                '-vcodec', 'libx264',
-                '-pix_fmt', 'yuv420p',
-                '-acodec', 'aac',
-                h264_output
-            ]
-            print(f"\n正在用 ffmpeg 转码为 H.264 mp4: {h264_output}")
-            subprocess.run(cmd, check=True)
-            print(f"H.264 视频已保存为: {h264_output}")
-        except Exception as e:
-            print(f"ffmpeg 转码失败: {e}")
-        
+
+        # Directly use ffmpeg to create H.264 video
+        # 优先使用项目根目录下的 ffmpeg.exe
+        local_ffmpeg = os.path.join(os.path.dirname(sys.argv[0]), 'ffmpeg.exe')
+        ffmpeg_path = local_ffmpeg if os.path.exists(local_ffmpeg) else 'ffmpeg'
+
+        # Create a temporary file list for ffmpeg
+        list_file_path = os.path.join(input_dir, 'filelist.txt')
+        with open(list_file_path, 'w') as f:
+            for filename in sorted(image_files):
+                f.write(f"file '{os.path.join(input_dir, filename)}'\n")
+
+        cmd = [
+            ffmpeg_path,
+            '-y',
+            '-r', str(fps),
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', list_file_path,
+            '-vcodec', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-s', f'{width}x{height}',
+            output_file
+        ]
+
+        print(f"\n正在用 ffmpeg 生成 H.264 mp4: {output_file}")
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print(f"H.264 视频已保存为: {output_file}")
+
+        # Clean up the temporary file list
+        os.remove(list_file_path)
+
+    except subprocess.CalledProcessError as e:
+        print(f"ffmpeg 执行失败: {e.stderr}")
     except Exception as e:
         print(f"An error occurred: {str(e)}")
-        if 'out' in locals():
-            out.release()
 
 if __name__ == "__main__":
     # Get input directory from user
